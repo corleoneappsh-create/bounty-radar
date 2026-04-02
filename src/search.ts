@@ -1,0 +1,153 @@
+import https from 'https';
+
+export interface Bounty {
+  repo: string;
+  issue: number;
+  title: string;
+  amount: string;
+  labels: string[];
+  url: string;
+  comments: number;
+  createdAt: string;
+  platform: string;
+}
+
+function githubSearch(query: string): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const url = `https://api.github.com/search/issues?q=${encodeURIComponent(query)}&per_page=50&sort=created&order=desc`;
+    const req = https.get(url, {
+      headers: {
+        'User-Agent': 'bounty-radar/1.0',
+        'Accept': 'application/vnd.github.v3+json'
+      }
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk: string) => data += chunk);
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); }
+        catch (e) { reject(new Error('Failed to parse GitHub response')); }
+      });
+    });
+    req.on('error', reject);
+  });
+}
+
+function extractAmount(labels: string[], title: string): string {
+  // Check labels for dollar amounts
+  for (const label of labels) {
+    const match = label.match(/\$[\d,.]+k?/i);
+    if (match) return match[0];
+  }
+  // Check title
+  const titleMatch = title.match(/\$[\d,.]+k?/i);
+  if (titleMatch) return titleMatch[0];
+  return 'Unknown';
+}
+
+function parseIssue(item: any, platform: string): Bounty {
+  const repoUrl = item.repository_url || '';
+  const repoParts = repoUrl.split('/');
+  const repo = repoParts.slice(-2).join('/');
+  const labels = (item.labels || []).map((l: any) => l.name);
+  
+  return {
+    repo,
+    issue: item.number,
+    title: item.title,
+    amount: extractAmount(labels, item.title),
+    labels,
+    url: item.html_url,
+    comments: item.comments || 0,
+    createdAt: item.created_at?.substring(0, 10) || 'unknown',
+    platform
+  };
+}
+
+export async function searchAlgoraBounties(options: { language?: string; minAmount?: number }): Promise<Bounty[]> {
+  const langFilter = options.language ? `+language:${options.language}` : '';
+  const query = `label:"💎 Bounty" state:open${langFilter}`;
+  
+  const data = await githubSearch(query);
+  if (!data.items) return [];
+  
+  return data.items
+    .map((item: any) => parseIssue(item, 'algora'))
+    .filter((b: Bounty) => {
+      if (options.minAmount) {
+        const amt = parseInt(b.amount.replace(/[$,k]/g, ''));
+        if (b.amount.includes('k')) return amt * 1000 >= options.minAmount;
+        return amt >= options.minAmount;
+      }
+      return true;
+    });
+}
+
+export async function searchLabelBounties(options: { language?: string; minAmount?: number }): Promise<Bounty[]> {
+  const langFilter = options.language ? `+language:${options.language}` : '';
+  const queries = [
+    `label:bounty state:open${langFilter}`,
+    `"bounty" in:title state:open is:issue${langFilter}`
+  ];
+  
+  const allBounties: Bounty[] = [];
+  const seen = new Set<string>();
+  
+  for (const query of queries) {
+    try {
+      const data = await githubSearch(query);
+      if (!data.items) continue;
+      
+      for (const item of data.items) {
+        const key = `${item.repository_url}#${item.number}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        allBounties.push(parseIssue(item, 'github-label'));
+      }
+    } catch {
+      // Rate limited or error, skip
+    }
+  }
+  
+  return allBounties.filter((b: Bounty) => {
+    if (options.minAmount) {
+      const amt = parseInt(b.amount.replace(/[$,k]/g, ''));
+      if (isNaN(amt)) return false;
+      if (b.amount.includes('k')) return amt * 1000 >= options.minAmount;
+      return amt >= options.minAmount;
+    }
+    return true;
+  });
+}
+
+export async function searchAll(options: { language?: string; minAmount?: number; maxComments?: number }): Promise<Bounty[]> {
+  const [algora, labels] = await Promise.all([
+    searchAlgoraBounties(options),
+    searchLabelBounties(options)
+  ]);
+  
+  // Deduplicate
+  const seen = new Set<string>();
+  const all: Bounty[] = [];
+  
+  for (const b of [...algora, ...labels]) {
+    const key = `${b.repo}#${b.issue}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (options.maxComments !== undefined && b.comments > options.maxComments) continue;
+    all.push(b);
+  }
+  
+  // Sort by amount (descending)
+  return all.sort((a, b) => {
+    const amtA = parseAmount(a.amount);
+    const amtB = parseAmount(b.amount);
+    return amtB - amtA;
+  });
+}
+
+function parseAmount(amount: string): number {
+  const cleaned = amount.replace(/[$,]/g, '');
+  if (cleaned.endsWith('k')) return parseFloat(cleaned) * 1000;
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? 0 : num;
+}
