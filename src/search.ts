@@ -1,4 +1,6 @@
 import https from 'https';
+import { ageInDays, assessIssueSafety } from './safety';
+import { assessRepositoryTrust } from './trust';
 
 export interface Bounty {
   repo: string;
@@ -10,6 +12,12 @@ export interface Bounty {
   comments: number;
   createdAt: string;
   platform: string;
+  safe: boolean;
+  riskFlags: string[];
+  ageDays: number;
+  trustedForAutoQueue: boolean;
+  trustFlags: string[];
+  assignees: string[];
 }
 
 function githubSearch(query: string): Promise<any> {
@@ -49,6 +57,10 @@ function parseIssue(item: any, platform: string): Bounty {
   const repoParts = repoUrl.split('/');
   const repo = repoParts.slice(-2).join('/');
   const labels = (item.labels || []).map((l: any) => l.name);
+  const body = item.body || '';
+  const safety = assessIssueSafety(item.title || '', body, labels);
+  const trust = assessRepositoryTrust(repo, item.title || '', labels);
+  const assignees = (item.assignees || []).map((a: any) => String(a.login || '')).filter(Boolean);
   
   return {
     repo,
@@ -59,7 +71,13 @@ function parseIssue(item: any, platform: string): Bounty {
     url: item.html_url,
     comments: item.comments || 0,
     createdAt: item.created_at?.substring(0, 10) || 'unknown',
-    platform
+    platform,
+    safe: safety.safe,
+    riskFlags: safety.riskFlags,
+    ageDays: ageInDays(item.created_at || ''),
+    trustedForAutoQueue: trust.trustedForAutoQueue,
+    trustFlags: trust.trustFlags,
+    assignees
   };
 }
 
@@ -119,7 +137,7 @@ export async function searchLabelBounties(options: { language?: string; minAmoun
   });
 }
 
-export async function searchAll(options: { language?: string; minAmount?: number; maxComments?: number }): Promise<Bounty[]> {
+export async function searchAll(options: { language?: string; minAmount?: number; maxComments?: number; maxAgeDays?: number; includeRisky?: boolean; includeUntrusted?: boolean; includeAssigned?: boolean }): Promise<Bounty[]> {
   const [algora, labels] = await Promise.all([
     searchAlgoraBounties(options),
     searchLabelBounties(options)
@@ -134,6 +152,10 @@ export async function searchAll(options: { language?: string; minAmount?: number
     if (seen.has(key)) continue;
     seen.add(key);
     if (options.maxComments !== undefined && b.comments > options.maxComments) continue;
+    if (options.maxAgeDays !== undefined && b.ageDays > options.maxAgeDays) continue;
+    if (!options.includeRisky && !b.safe) continue;
+    if (!options.includeUntrusted && !b.trustedForAutoQueue) continue;
+    if (!options.includeAssigned && b.assignees.length > 0) continue;
     all.push(b);
   }
   

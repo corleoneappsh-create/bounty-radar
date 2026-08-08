@@ -15,6 +15,10 @@ Options:
   --lang <language>     Filter by programming language (e.g., typescript, python)
   --min <amount>        Minimum bounty amount in USD (e.g., 50)
   --max-comments <n>    Max comments (lower = less competition)
+  --max-age-days <n>    Reject issues older than N days
+  --include-risky       Include issues flagged by the safety scanner
+  --include-untrusted   Include quarantined/manual-review repositories
+  --include-assigned    Include issues already assigned to someone
   --json                Output as JSON
   --help                Show this help
 
@@ -40,12 +44,16 @@ async function main() {
   const language = getArg('--lang');
   const minAmount = getArg('--min') ? parseInt(getArg('--min')!) : undefined;
   const maxComments = getArg('--max-comments') ? parseInt(getArg('--max-comments')!) : undefined;
+  const maxAgeDays = getArg('--max-age-days') ? parseInt(getArg('--max-age-days')!) : undefined;
+  const includeRisky = args.includes('--include-risky');
+  const includeUntrusted = args.includes('--include-untrusted');
+  const includeAssigned = args.includes('--include-assigned');
   const jsonOutput = args.includes('--json');
 
-  console.log('🔍 Scanning GitHub for bounties...\n');
+  if (!jsonOutput) console.log('🔍 Scanning GitHub for bounties...\n');
 
   try {
-    const bounties = await searchAll({ language, minAmount, maxComments });
+    const bounties = await searchAll({ language, minAmount, maxComments, maxAgeDays, includeRisky, includeUntrusted, includeAssigned });
 
     if (jsonOutput) {
       console.log(JSON.stringify(bounties, null, 2));
@@ -65,7 +73,10 @@ async function main() {
       console.log(`  💰 ${b.amount.padEnd(10)} │ ${competition.padEnd(10)} │ ${b.repo}`);
       console.log(`     ${b.title.substring(0, 80)}`);
       console.log(`     ${b.url}`);
-      console.log(`     Platform: ${b.platform} │ Comments: ${b.comments} │ Created: ${b.createdAt}`);
+      console.log(`     Platform: ${b.platform} │ Comments: ${b.comments} │ Age: ${b.ageDays}d │ Safe: ${b.safe}`);
+      if (b.riskFlags.length) console.log(`     Risk: ${b.riskFlags.join(', ')}`);
+      if (b.trustFlags.length) console.log(`     Trust: ${b.trustFlags.join(', ')}`);
+      if (b.assignees.length) console.log(`     Assigned: ${b.assignees.join(', ')}`);
       console.log('─'.repeat(100));
     }
 
