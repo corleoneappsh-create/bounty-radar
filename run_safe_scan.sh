@@ -3,6 +3,11 @@ set -eu
 
 ROOT="$HOME/MoneyLab/bounty-radar"
 OUT="$ROOT/monitor"
+
+if command -v gh >/dev/null 2>&1; then
+  GH_TOKEN="$(gh auth token 2>/dev/null || true)"
+  [ -z "$GH_TOKEN" ] || export GH_TOKEN
+fi
 mkdir -p "$OUT"
 
 TMP="$OUT/latest.json.tmp"

@@ -6,6 +6,7 @@ export interface TrustAssessment {
 const QUARANTINED_REPOSITORIES = new Map<string, string>([
   ['SecureBananaLabs/bug-bounty', 'observed-pending-settlement-no-confirmed-payout'],
   ['ClankerNation/OpenAgents', 'observed-agent-context-exfiltration-requirement'],
+  ['UnsafeLabs/RFC-5322', 'observed-bounty-pr-churn-and-auto-close-history'],
 ]);
 
 export function assessRepositoryTrust(repo: string, title: string, labels: string[]): TrustAssessment {
@@ -15,6 +16,10 @@ export function assessRepositoryTrust(repo: string, title: string, labels: strin
 
   if (/bounty[-_ ]?plaza/i.test(repo)) {
     trustFlags.push('bounty-mirror-not-source-repository');
+  }
+
+  if (/^UnsafeLabs\//i.test(repo)) {
+    trustFlags.push('unsafe-labs-namespace-manual-review');
   }
 
   const text = `${title}\n${labels.join(' ')}`;

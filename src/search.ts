@@ -1,6 +1,8 @@
 import https from 'https';
 import { ageInDays, assessIssueSafety } from './safety';
 import { assessRepositoryTrust } from './trust';
+import { searchIssueHuntBounties } from './issuehunt';
+import { checkGithubCompetition } from './claimability';
 
 export interface Bounty {
   repo: string;
@@ -18,6 +20,11 @@ export interface Bounty {
   trustedForAutoQueue: boolean;
   trustFlags: string[];
   assignees: string[];
+  contested?: boolean;
+  claimSignals?: number;
+  distinctClaimers?: number;
+  relatedPullRequests?: number;
+  competitionFlags?: string[];
 }
 
 function githubSearch(query: string): Promise<any> {
@@ -25,8 +32,9 @@ function githubSearch(query: string): Promise<any> {
     const url = `https://api.github.com/search/issues?q=${encodeURIComponent(query)}&per_page=50&sort=created&order=desc`;
     const req = https.get(url, {
       headers: {
-        'User-Agent': 'bounty-radar/1.0',
-        'Accept': 'application/vnd.github.v3+json'
+        'User-Agent': 'bounty-radar/1.1',
+        'Accept': 'application/vnd.github.v3+json',
+        ...(process.env.GH_TOKEN ? { Authorization: `Bearer ${process.env.GH_TOKEN}` } : {}),
       }
     }, (res) => {
       let data = '';
@@ -137,17 +145,18 @@ export async function searchLabelBounties(options: { language?: string; minAmoun
   });
 }
 
-export async function searchAll(options: { language?: string; minAmount?: number; maxComments?: number; maxAgeDays?: number; includeRisky?: boolean; includeUntrusted?: boolean; includeAssigned?: boolean }): Promise<Bounty[]> {
-  const [algora, labels] = await Promise.all([
+export async function searchAll(options: { language?: string; minAmount?: number; maxComments?: number; maxAgeDays?: number; includeRisky?: boolean; includeUntrusted?: boolean; includeAssigned?: boolean; includeContested?: boolean }): Promise<Bounty[]> {
+  const [algora, labels, issuehunt] = await Promise.all([
     searchAlgoraBounties(options),
-    searchLabelBounties(options)
+    searchLabelBounties(options),
+    searchIssueHuntBounties({ minAmount: options.minAmount })
   ]);
   
   // Deduplicate
   const seen = new Set<string>();
-  const all: Bounty[] = [];
+  const preliminary: Bounty[] = [];
   
-  for (const b of [...algora, ...labels]) {
+  for (const b of [...algora, ...labels, ...issuehunt]) {
     const key = `${b.repo}#${b.issue}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -156,7 +165,15 @@ export async function searchAll(options: { language?: string; minAmount?: number
     if (!options.includeRisky && !b.safe) continue;
     if (!options.includeUntrusted && !b.trustedForAutoQueue) continue;
     if (!options.includeAssigned && b.assignees.length > 0) continue;
-    all.push(b);
+    preliminary.push(b);
+  }
+
+  const all: Bounty[] = [];
+  for (const b of preliminary) {
+    const competition = await checkGithubCompetition(b.repo, b.issue);
+    const enriched = { ...b, ...competition };
+    if (!options.includeContested && competition.contested) continue;
+    all.push(enriched);
   }
   
   // Sort by amount (descending)

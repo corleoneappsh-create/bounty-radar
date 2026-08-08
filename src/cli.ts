@@ -19,6 +19,7 @@ Options:
   --include-risky       Include issues flagged by the safety scanner
   --include-untrusted   Include quarantined/manual-review repositories
   --include-assigned    Include issues already assigned to someone
+  --include-contested   Include issues with multiple claim/PR signals
   --json                Output as JSON
   --help                Show this help
 
@@ -48,12 +49,13 @@ async function main() {
   const includeRisky = args.includes('--include-risky');
   const includeUntrusted = args.includes('--include-untrusted');
   const includeAssigned = args.includes('--include-assigned');
+  const includeContested = args.includes('--include-contested');
   const jsonOutput = args.includes('--json');
 
   if (!jsonOutput) console.log('🔍 Scanning GitHub for bounties...\n');
 
   try {
-    const bounties = await searchAll({ language, minAmount, maxComments, maxAgeDays, includeRisky, includeUntrusted, includeAssigned });
+    const bounties = await searchAll({ language, minAmount, maxComments, maxAgeDays, includeRisky, includeUntrusted, includeAssigned, includeContested });
 
     if (jsonOutput) {
       console.log(JSON.stringify(bounties, null, 2));
@@ -77,6 +79,7 @@ async function main() {
       if (b.riskFlags.length) console.log(`     Risk: ${b.riskFlags.join(', ')}`);
       if (b.trustFlags.length) console.log(`     Trust: ${b.trustFlags.join(', ')}`);
       if (b.assignees.length) console.log(`     Assigned: ${b.assignees.join(', ')}`);
+      if (b.competitionFlags?.length) console.log(`     Competition: ${b.competitionFlags.join(', ')} (claims=${b.claimSignals ?? 0}, PRs=${b.relatedPullRequests ?? 0})`);
       console.log('─'.repeat(100));
     }
 
